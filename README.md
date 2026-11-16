@@ -17,6 +17,18 @@ npm run install:all
 
 ## Run
 
+### Docker Compose
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs
+```
+
+Open http://localhost:5173. The backend is available at http://localhost:5000. Stop with `docker compose down`; this preserves the existing `mongodb_data` volume. Never use `docker compose down -v`.
+
+### Native development
+
 Start MongoDB:
 
 ```bash

@@ -6,6 +6,36 @@ services:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' localhost:27017/test | grep 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: ./server
+    restart: unless-stopped
+    env_file:
+      - ./server/.env
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/breece_crm
+    ports:
+      - "127.0.0.1:5000:5000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  client:
+    build:
+      context: ./client
+    restart: unless-stopped
+    environment:
+      VITE_API_TARGET: http://server:5000
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - server
 
 volumes:
   mongodb_data:
