@@ -24,6 +24,7 @@ const publicUser = (user) => ({ id: user._id, name: user.name, email: user.email
 const issueSession = (res, user) => {
   const token = jwt.sign({ userId: user._id.toString() }, process.env.JWT_SECRET, { expiresIn: '7d' });
   res.cookie('session', token, cookieOptions());
+  res.cookie('csrfToken', crypto.randomBytes(32).toString('hex'), { ...cookieOptions(), httpOnly: false });
 };
 
 const oauthStateCookie = { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 10 * 60 * 1000, path: '/api/auth/google' };
@@ -126,6 +127,7 @@ router.get('/me', authenticate, (req, res) => {
 
 router.post('/logout', (_req, res) => {
   res.clearCookie('session', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', path: '/' });
+  res.clearCookie('csrfToken', { httpOnly: false, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', path: '/' });
   res.status(204).end();
 });
 

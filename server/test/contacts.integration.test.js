@@ -6,6 +6,7 @@ import User from '../src/models/User.js';
 import Contact from '../src/models/Contact.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
+import jwt from 'jsonwebtoken';
 
 const enabled = Boolean(process.env.MONGODB_URI);
 let server;
@@ -17,8 +18,10 @@ const register = async (name, email) => {
   const response = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name, email, password: 'correct-horse' }) });
   assert.equal(response.status, 201);
   users.push(email);
-  return response.headers.get('set-cookie').split(';')[0];
+  return response.headers.getSetCookie().map((cookie) => cookie.split(';')[0]).join('; ');
 };
+
+const csrfFrom = (cookie) => cookie.match(/(?:^|; )csrfToken=([^;]+)/)?.[1];
 
 test('contact CRUD, filtering, validation, and user isolation', { skip: !enabled }, async () => {
   const firstCookie = await register('First User', `first-${Date.now()}@example.com`);
@@ -76,6 +79,27 @@ test('Google configuration fails safely and sensitive endpoints rate-limit', { s
   let last;
   for (let i = 0; i < 11; i += 1) last = await request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: `rate-${i}@example.com` }) });
   assert.equal(last.status, 429);
+});
+
+test('privacy export is isolated and account deletion verifies identity', { skip: !enabled }, async () => {
+  const email = `privacy-${Date.now()}@example.com`;
+  const otherEmail = `privacy-other-${Date.now()}@example.com`;
+  const user = await User.create({ name: 'Privacy User', email, passwordHash: await bcrypt.hash('correct-horse', 4) });
+  const other = await User.create({ name: 'Privacy Other', email: otherEmail, passwordHash: await bcrypt.hash('correct-horse', 4) });
+  users.push(email, otherEmail);
+  const cookie = `session=${jwt.sign({ userId: user._id.toString() }, process.env.JWT_SECRET)}; csrfToken=privacy-csrf`;
+  const otherCookie = `session=${jwt.sign({ userId: other._id.toString() }, process.env.JWT_SECRET)}; csrfToken=other-csrf`;
+  const created = await request('/api/contacts', { method: 'POST', body: JSON.stringify({ firstName: 'Private', notes: 'private note', category: 'Personal' }) }, cookie);
+  const contact = (await created.json()).contact;
+  const exported = await request('/api/privacy/export', {}, cookie);
+  assert.equal(exported.status, 200); assert.equal(exported.headers.get('cache-control'), 'no-store'); assert.match(exported.headers.get('content-disposition'), /attachment/);
+  const data = await exported.json(); assert.equal(data.profile.email, email); assert.equal(data.contacts[0].notes, 'private note'); assert.equal(JSON.stringify(data).includes('passwordHash'), false); assert.equal(JSON.stringify(data).includes('resetToken'), false);
+  assert.equal((await request('/api/privacy/export')).status, 401);
+  assert.equal((await request(`/api/contacts/${contact._id}`, {}, otherCookie)).status, 404);
+  const csrf = csrfFrom(cookie);
+  assert.equal((await request('/api/privacy/account', { method: 'DELETE', body: JSON.stringify({ confirmation: 'DELETE MY ACCOUNT', currentPassword: 'wrong' }), headers: { 'x-csrf-token': csrf } }, cookie)).status, 401);
+  assert.equal((await request('/api/privacy/account', { method: 'DELETE', body: JSON.stringify({ confirmation: 'DELETE MY ACCOUNT', currentPassword: 'correct-horse' }), headers: { 'x-csrf-token': csrf } }, cookie)).status, 204);
+  assert.equal((await request('/api/auth/me', {}, cookie)).status, 401);
 });
 
 if (enabled) {
