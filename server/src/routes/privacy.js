@@ -4,11 +4,12 @@ import bcrypt from 'bcryptjs';
 import { OAuth2Client } from 'google-auth-library';
 import User from '../models/User.js';
 import Contact from '../models/Contact.js';
+import Goal from '../models/Goal.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = Router();
 const confirmation = 'DELETE MY ACCOUNT';
-const publicContactFields = ['firstName', 'lastName', 'photo', 'meetingDate', 'meetingPlace', 'email', 'phone', 'company', 'jobTitle', 'mainSocialNetwork', 'category', 'notes', 'relationshipStatus', 'createdAt', 'updatedAt'];
+const publicContactFields = ['firstName', 'lastName', 'photo', 'meetingDate', 'meetingPlace', 'email', 'phone', 'company', 'jobTitle', 'mainSocialNetwork', 'category', 'notes', 'relationshipStatus', 'followUpAt', 'reminderNote', 'followUpStatus', 'reminderEmailEnabled', 'notificationStatus', 'createdAt', 'updatedAt'];
 const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', path: '/' };
 
 const csrfValid = (req) => {
@@ -22,7 +23,8 @@ const googleClient = () => new OAuth2Client(process.env.GOOGLE_CLIENT_ID, proces
 router.get('/export', authenticate, async (req, res, next) => {
   try {
     const contacts = await Contact.find({ owner: req.user._id }).select(publicContactFields.join(' ')).lean();
-    const data = { exportedAt: new Date().toISOString(), profile: { name: req.user.name, email: req.user.email }, contacts };
+    const objectives = await Goal.find({ owner: req.user._id }).select('month target createdAt updatedAt').lean();
+    const data = { exportedAt: new Date().toISOString(), profile: { name: req.user.name, email: req.user.email }, contacts, objectives };
     res.set({ 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename="breece-crm-data.json"', 'Cache-Control': 'no-store' });
     res.json(data);
   } catch (error) { next(error); }
@@ -42,6 +44,7 @@ router.delete('/account', authenticate, async (req, res, next) => {
       if (!payload?.sub || payload.sub !== user.googleSubject || !payload.email_verified) return res.status(401).json({ error: 'Identity verification failed' });
     }
     await Contact.deleteMany({ owner: user._id });
+    await Goal.deleteMany({ owner: user._id });
     await User.deleteOne({ _id: user._id });
     res.clearCookie('session', cookieOptions); res.clearCookie('csrfToken', { ...cookieOptions, httpOnly: false });
     res.status(204).end();

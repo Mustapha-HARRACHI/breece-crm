@@ -16,6 +16,16 @@ const contactSchema = new mongoose.Schema(
     category: { type: String, enum: ['Professional', 'Personal', 'Network'], default: 'Network' },
     notes: { type: String, trim: true, maxlength: 5000 },
     relationshipStatus: { type: String, enum: ['Active', 'Inactive', 'ToContact'], default: 'Active' }
+    ,followUpAt: { type: Date },
+    reminderNote: { type: String, trim: true, maxlength: 1000 },
+    followUpStatus: { type: String, enum: ['Scheduled', 'Completed', 'Cancelled'], default: 'Scheduled' },
+    reminderEmailEnabled: { type: Boolean, default: false },
+    notificationStatus: { type: String, enum: ['Disabled', 'Pending', 'Sent', 'Failed'], default: 'Disabled' },
+    notificationAttempts: { type: Number, default: 0, min: 0, max: 3, select: false },
+    notificationClaimedAt: { type: Date, select: false },
+    notificationNextAttemptAt: { type: Date, select: false },
+    notificationSentAt: { type: Date, select: false },
+    notificationLastError: { type: String, maxlength: 500, select: false }
   },
   { timestamps: true }
 );
@@ -23,5 +33,6 @@ const contactSchema = new mongoose.Schema(
 contactSchema.index({ owner: 1, lastName: 1, firstName: 1 });
 contactSchema.index({ owner: 1, category: 1 });
 contactSchema.index({ owner: 1, createdAt: -1 });
+contactSchema.index({ followUpAt: 1, reminderEmailEnabled: 1, notificationStatus: 1 });
 
 export default mongoose.model('Contact', contactSchema);

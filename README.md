@@ -58,3 +58,7 @@ Copy `server/.env.example` to `server/.env` and set `JWT_SECRET`. Google OAuth r
 Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL`. Password recovery requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`. Live Google and SMTP verification requires real credentials.
 
 Stop MongoDB with `docker compose down`. Data is retained in the `mongodb_data` volume.
+
+### Cookies and sessions
+
+The application uses only essential cookies: the HttpOnly `session` cookie (7-day JWT session), a readable `csrfToken` cookie for CSRF headers, and a short-lived HttpOnly `oauth_state` cookie during Google sign-in. Cookies are `Secure` in production, use `SameSite=Strict` for the application session (Lax for OAuth), and are cleared on logout or account deletion. No analytics, advertising, tracking, or optional cookies are used, so no optional consent is requested.
