@@ -37,4 +37,12 @@ npm run dev --prefix client
 
 Open http://localhost:5173. The frontend checks `GET /api/health` through the Vite proxy.
 
+### Authentication configuration
+
+Copy `server/.env.example` to `server/.env` and set `JWT_SECRET`. Google OAuth requires this callback URL:
+
+`http://localhost:5000/api/auth/google/callback`
+
+Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL`. Password recovery requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`. Live Google and SMTP verification requires real credentials.
+
 Stop MongoDB with `docker compose down`. Data is retained in the `mongodb_data` volume.

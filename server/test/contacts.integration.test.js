@@ -4,6 +4,8 @@ import mongoose from 'mongoose';
 import app from '../src/app.js';
 import User from '../src/models/User.js';
 import Contact from '../src/models/Contact.js';
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 
 const enabled = Boolean(process.env.MONGODB_URI);
 let server;
@@ -43,6 +45,37 @@ test('statistics are authenticated, scoped, filterable, and empty-safe', { skip:
   assert.deepEqual(data.meetingPlaces, [{ _id: 'Paris', count: 1 }]);
   assert.equal((await request('/api/stats?from=bad-date', {}, firstCookie)).status, 400);
   assert.equal((await request('/api/stats')).status, 401);
+});
+
+test('password reset is generic, expires, is single-use, and changes the password', { skip: !enabled }, async () => {
+  process.env.NODE_ENV = 'test';
+  const email = `reset-${Date.now()}@example.com`;
+  const passwordHash = await bcrypt.hash('old-password', 4);
+  const user = await User.create({ name: 'Reset User', email, passwordHash });
+  users.push(email);
+  const unknown = await request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: 'missing@example.com' }) });
+  const known = await request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+  assert.equal(unknown.status, 200); assert.equal(known.status, 200); assert.deepEqual(await unknown.json(), await known.json());
+  const token = 'known-reset-token'; user.resetTokenHash = crypto.createHash('sha256').update(token).digest('hex'); user.resetTokenExpiresAt = new Date(Date.now() + 20 * 60 * 1000); await user.save();
+  const reset = await request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password: 'new-password' }) });
+  assert.equal(reset.status, 200);
+  assert.equal((await request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password: 'another-password' }) })).status, 400);
+  const expired = 'expired-token'; user.resetTokenHash = crypto.createHash('sha256').update(expired).digest('hex'); user.resetTokenExpiresAt = new Date(Date.now() - 1); await user.save();
+  assert.equal((await request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ token: expired, password: 'new-password' }) })).status, 400);
+  const loginOld = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password: 'old-password' }) });
+  assert.equal(loginOld.status, 401);
+  const loginNew = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password: 'new-password' }) });
+  assert.equal(loginNew.status, 200);
+});
+
+test('Google configuration fails safely and sensitive endpoints rate-limit', { skip: !enabled }, async () => {
+  const saved = { id: process.env.GOOGLE_CLIENT_ID, secret: process.env.GOOGLE_CLIENT_SECRET, callback: process.env.GOOGLE_CALLBACK_URL };
+  delete process.env.GOOGLE_CLIENT_ID; delete process.env.GOOGLE_CLIENT_SECRET; delete process.env.GOOGLE_CALLBACK_URL;
+  assert.ok([503, 429].includes((await request('/api/auth/google')).status));
+  Object.assign(process.env, { GOOGLE_CLIENT_ID: saved.id, GOOGLE_CLIENT_SECRET: saved.secret, GOOGLE_CALLBACK_URL: saved.callback });
+  let last;
+  for (let i = 0; i < 11; i += 1) last = await request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: `rate-${i}@example.com` }) });
+  assert.equal(last.status, 429);
 });
 
 if (enabled) {
