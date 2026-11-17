@@ -1,9 +1,12 @@
 FROM node:22-bookworm-slim
 
 WORKDIR /app
-COPY package*.json ./
+COPY --chown=node:node package*.json ./
 RUN npm ci
-COPY . .
+COPY --chown=node:node . .
+RUN chown node:node /app
+
+USER node
 
 EXPOSE 5173
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

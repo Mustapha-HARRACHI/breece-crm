@@ -20,9 +20,10 @@ const contactSchema = new mongoose.Schema(
     reminderNote: { type: String, trim: true, maxlength: 1000 },
     followUpStatus: { type: String, enum: ['Scheduled', 'Completed', 'Cancelled'], default: 'Scheduled' },
     reminderEmailEnabled: { type: Boolean, default: false },
-    notificationStatus: { type: String, enum: ['Disabled', 'Pending', 'Sent', 'Failed'], default: 'Disabled' },
+    notificationStatus: { type: String, enum: ['Disabled', 'Pending', 'Sending', 'Sent', 'Failed'], default: 'Disabled' },
     notificationAttempts: { type: Number, default: 0, min: 0, max: 3, select: false },
     notificationClaimedAt: { type: Date, select: false },
+    notificationClaimId: { type: String, select: false },
     notificationNextAttemptAt: { type: Date, select: false },
     notificationSentAt: { type: Date, select: false },
     notificationLastError: { type: String, maxlength: 500, select: false }

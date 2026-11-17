@@ -4,6 +4,9 @@ const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, minlength: 1, maxlength: 100 },
     email: { type: String, required: true, lowercase: true, trim: true, maxlength: 254 },
+    sessionVersion: { type: Number, default: 0, min: 0, select: false },
+    deletionStatus: { type: String, enum: ['Active', 'Pending'], default: 'Active', select: false },
+    deletionError: { type: String, maxlength: 200, select: false },
     passwordHash: { type: String, select: false },
     googleSubject: { type: String, unique: true, sparse: true, select: false },
     resetTokenHash: { type: String, select: false },

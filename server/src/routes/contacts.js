@@ -56,7 +56,7 @@ router.patch('/:id', async (req, res, next) => {
     if (Object.hasOwn(data, 'followUpAt') || Object.hasOwn(data, 'reminderEmailEnabled') || Object.hasOwn(data, 'followUpStatus')) {
       data.notificationStatus = data.reminderEmailEnabled === false || data.followUpAt === null || data.followUpStatus === 'Completed' || data.followUpStatus === 'Cancelled' ? 'Disabled' : 'Pending';
       data.notificationAttempts = 0;
-      data.$unset = { notificationClaimedAt: 1, notificationNextAttemptAt: 1, notificationSentAt: 1, notificationLastError: 1 };
+      data.$unset = { notificationClaimedAt: 1, notificationClaimId: 1, notificationNextAttemptAt: 1, notificationSentAt: 1, notificationLastError: 1 };
     }
     const contact = await Contact.findOneAndUpdate({ _id: req.params.id, owner: req.user._id }, data, { new: true, runValidators: true });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
@@ -86,7 +86,7 @@ router.patch('/:id/reminder', async (req, res, next) => {
     if (Object.keys(update).some((key) => ['followUpAt', 'followUpStatus', 'reminderEmailEnabled'].includes(key))) {
       update.notificationStatus = effectiveEnabled && effectiveDate && update.followUpStatus !== 'Completed' && update.followUpStatus !== 'Cancelled' ? 'Pending' : 'Disabled';
       update.notificationAttempts = 0;
-      update.$unset = { notificationClaimedAt: 1, notificationNextAttemptAt: 1, notificationSentAt: 1, notificationLastError: 1 };
+      update.$unset = { notificationClaimedAt: 1, notificationClaimId: 1, notificationNextAttemptAt: 1, notificationSentAt: 1, notificationLastError: 1 };
     }
     const contact = await Contact.findOneAndUpdate({ _id: req.params.id, owner: req.user._id }, update, { new: true, runValidators: true });
     if (!contact) return res.status(404).json({ error: 'Contact not found' }); res.json({ contact });

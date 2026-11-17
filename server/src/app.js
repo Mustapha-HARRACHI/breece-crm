@@ -10,6 +10,20 @@ import reminderRoutes from './routes/reminders.js';
 
 const app = express();
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+const production = process.env.NODE_ENV === 'production';
+
+app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 1 : false);
+app.use((_req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'X-Frame-Options': 'DENY',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+  });
+  if (production && process.env.ENABLE_HSTS === 'true') res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
 
 app.use(cors({ origin: clientOrigin, credentials: true }));
 app.use(express.json({ limit: '100kb' }));

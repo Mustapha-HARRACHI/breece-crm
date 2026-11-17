@@ -62,3 +62,7 @@ Stop MongoDB with `docker compose down`. Data is retained in the `mongodb_data` 
 ### Cookies and sessions
 
 The application uses only essential cookies: the HttpOnly `session` cookie (7-day JWT session), a readable `csrfToken` cookie for CSRF headers, and a short-lived HttpOnly `oauth_state` cookie during Google sign-in. Cookies are `Secure` in production, use `SameSite=Strict` for the application session (Lax for OAuth), and are cleared on logout or account deletion. No analytics, advertising, tracking, or optional cookies are used, so no optional consent is requested.
+
+### Security deployment notes
+
+The Express API and Vite development server send baseline security headers. The Docker client is a development server and its CSP permits only the Vite development websocket plus the minimal React development allowances; production frontend hosting must send its own restrictive CSP because browser document headers come from the frontend server. Local HTTP uses `TRUST_PROXY=0` and `ENABLE_HSTS=false`. Behind a trusted HTTPS reverse proxy, set `NODE_ENV=production`, `TRUST_PROXY=1` only when the deployment has exactly one trusted proxy hop, and enable HSTS only after HTTPS is enforced end-to-end. Do not expose the development Vite server publicly.
