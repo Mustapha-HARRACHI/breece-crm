@@ -9,7 +9,7 @@ import { authenticate } from '../middleware/auth.js';
 import { sendPasswordResetEmail } from '../services/mailer.js';
 
 const router = Router();
-const sensitiveLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, keyGenerator: (req) => `${ipKeyGenerator(req.ip)}:${req.path}` });
+const sensitiveLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many attempts. Please try again later.' }, keyGenerator: (req) => `${ipKeyGenerator(req.ip)}:${req.path}` });
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const cookieOptions = () => ({
   httpOnly: true,

@@ -10,7 +10,7 @@ import jwt from 'jsonwebtoken';
 import Goal from '../src/models/Goal.js';
 import { OAuth2Client } from 'google-auth-library';
 import { processDueReminders } from '../src/services/reminderScheduler.js';
-import { setTransportOverride } from '../src/services/mailer.js';
+import { setTransportOverride, sendPasswordResetEmail, sendReminderEmail } from '../src/services/mailer.js';
 
 const enabled = Boolean(process.env.MONGODB_URI);
 let server;
@@ -29,13 +29,25 @@ const csrfFrom = (cookie) => cookie.match(/(?:^|; )csrfToken=([^;]+)/)?.[1];
 const sessionCookie = (user) => `session=${jwt.sign({ userId: user._id.toString(), sessionVersion: user.sessionVersion ?? 0 }, process.env.JWT_SECRET)}`;
 
 test('contact CRUD, filtering, validation, and user isolation', { skip: !enabled }, async () => {
-  const firstCookie = await register('First User', `first-${Date.now()}@example.com`);
+  const firstEmail = `first-${Date.now()}@example.com`;
+  const firstCookie = await register('First User', firstEmail);
   const secondCookie = await register('Second User', `second-${Date.now()}@example.com`);
-  const create = await request('/api/contacts', { method: 'POST', body: JSON.stringify({ firstName: 'Ada', lastName: 'Lovelace', company: 'Analytical Engines', category: 'Professional' }) }, firstCookie);
+  assert.equal((await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: 'Duplicate', email: firstEmail, password: 'correct-horse' }) })).status, 409);
+  assert.equal((await request('/api/contacts')).status, 401);
+  assert.equal((await request('/api/contacts', { method: 'POST', body: JSON.stringify({ category: 'Invalid' }) }, firstCookie)).status, 400);
+  const firstUserId = (await (await request('/api/auth/me', {}, firstCookie)).json()).user.id;
+  const secondUserId = (await (await request('/api/auth/me', {}, secondCookie)).json()).user.id;
+  const create = await request('/api/contacts', { method: 'POST', body: JSON.stringify({ firstName: 'Ada', lastName: 'Lovelace', company: 'Analytical Engines', category: 'Professional', owner: secondUserId }) }, firstCookie);
   assert.equal(create.status, 201);
   const contact = (await create.json()).contact;
-  assert.equal((await request('/api/contacts?search=ada&category=Professional', {}, firstCookie)).status, 200);
+  assert.equal(contact.owner, firstUserId);
+  assert.equal((await (await request(`/api/contacts/${contact._id}`, {}, firstCookie)).json()).contact.firstName, 'Ada');
+  assert.equal((await (await request('/api/contacts?search=ada&category=Professional&relationshipStatus=Active', {}, firstCookie)).json()).contacts.length, 1);
+  assert.equal((await (await request('/api/contacts?search=ada&category=Personal', {}, firstCookie)).json()).contacts.length, 0);
+  assert.equal((await (await request('/api/contacts', {}, secondCookie)).json()).contacts.length, 0);
   assert.equal((await request(`/api/contacts/${contact._id}`, {}, secondCookie)).status, 404);
+  assert.equal((await request(`/api/contacts/${contact._id}`, { method: 'PATCH', body: JSON.stringify({ firstName: 'Stolen' }) }, secondCookie)).status, 404);
+  assert.equal((await request(`/api/contacts/${contact._id}`, { method: 'DELETE' }, secondCookie)).status, 404);
   assert.equal((await request(`/api/contacts/${contact._id}`, { method: 'PATCH', body: JSON.stringify({ relationshipStatus: 'ToContact' }) }, firstCookie)).status, 200);
   assert.equal((await request(`/api/contacts/${contact._id}`, { method: 'DELETE' }, firstCookie)).status, 204);
   assert.equal((await request('/api/contacts/not-an-id', {}, firstCookie)).status, 400);
@@ -54,8 +66,21 @@ test('authentication cookies have secure local-development attributes', { skip: 
   assert.match((await request('/api/auth/logout', { method: 'POST' })).headers.getSetCookie().find((cookie) => cookie.startsWith('session=')), /Expires=Thu, 01 Jan 1970/);
 });
 
+test('legacy password account without sessionVersion can establish a current session', { skip: !enabled }, async () => {
+  const email = `legacy-${Date.now()}@example.invalid`;
+  users.push(email);
+  await User.collection.insertOne({ name: 'Legacy QA', email, passwordHash: await bcrypt.hash('legacy-password', 4) });
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password: 'legacy-password' }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.getSetCookie().map((value) => value.split(';')[0]).join('; ');
+  assert.equal((await request('/api/auth/me', {}, cookie)).status, 200);
+  const legacy = `session=${jwt.sign({ userId: (await User.findOne({ email }))._id.toString() }, process.env.JWT_SECRET)}`;
+  assert.equal((await request('/api/auth/me', {}, legacy)).status, 401);
+});
+
 test('statistics are authenticated, scoped, filterable, and empty-safe', { skip: !enabled }, async () => {
   const firstCookie = await register('Stats User', `stats-${Date.now()}@example.com`);
+  const secondCookie = await register('Other Stats User', `other-stats-${Date.now()}@example.com`);
   const create = await request('/api/contacts', { method: 'POST', body: JSON.stringify({ firstName: 'Grace', category: 'Professional', meetingPlace: 'Paris', relationshipStatus: 'ToContact' }) }, firstCookie);
   assert.equal(create.status, 201);
   const stats = await request('/api/stats', {}, firstCookie);
@@ -63,7 +88,11 @@ test('statistics are authenticated, scoped, filterable, and empty-safe', { skip:
   const data = await stats.json();
   assert.equal(data.total, 1);
   assert.equal(data.followUps, 1);
+  assert.deepEqual(data.categories, [{ _id: 'Professional', count: 1 }]);
+  assert.deepEqual(data.monthly, [{ _id: new Date().toISOString().slice(0, 7), count: 1 }]);
   assert.deepEqual(data.meetingPlaces, [{ _id: 'Paris', count: 1 }]);
+  assert.equal((await (await request('/api/stats?from=2099-01-01', {}, firstCookie)).json()).total, 0);
+  assert.equal((await (await request('/api/stats', {}, secondCookie)).json()).total, 0);
   assert.equal((await request('/api/stats?from=bad-date', {}, firstCookie)).status, 400);
   assert.equal((await request('/api/stats')).status, 401);
 });
@@ -106,6 +135,51 @@ test('Google configuration fails safely and sensitive endpoints rate-limit', { s
   let last;
   for (let i = 0; i < 11; i += 1) last = await request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: `rate-${i}@example.com` }) });
   assert.equal(last.status, 429);
+  assert.match(last.headers.get('content-type'), /application\/json/);
+  assert.equal(typeof (await last.json()).error, 'string');
+});
+
+test('Google sign-in verifies identity, preserves session versions, and refuses password-account collisions', { skip: !enabled }, async () => {
+  const saved = { id: process.env.GOOGLE_CLIENT_ID, secret: process.env.GOOGLE_CLIENT_SECRET, callback: process.env.GOOGLE_CALLBACK_URL, origin: process.env.CLIENT_ORIGIN };
+  Object.assign(process.env, { GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-secret', GOOGLE_CALLBACK_URL: 'http://localhost:5000/api/auth/google/callback', CLIENT_ORIGIN: 'http://localhost:5173' });
+  const original = { generate: OAuth2Client.prototype.generateAuthUrl, token: OAuth2Client.prototype.getToken, verify: OAuth2Client.prototype.verifyIdToken };
+  const email = `google-login-${Date.now()}@example.invalid`;
+  const collisionEmail = `google-collision-${Date.now()}@example.invalid`;
+  users.push(email, collisionEmail);
+  let identity = { sub: `google-qa-${Date.now()}`, email, email_verified: true, iss: 'https://accounts.google.com', name: 'Google QA' };
+  try {
+    OAuth2Client.prototype.generateAuthUrl = () => 'https://accounts.google.com/mock';
+    OAuth2Client.prototype.getToken = async () => ({ tokens: { id_token: 'mock-id-token' } });
+    OAuth2Client.prototype.verifyIdToken = async () => ({ getPayload: () => identity });
+    const callback = async () => {
+      const start = await request('/api/auth/google', { redirect: 'manual' });
+      assert.equal(start.status, 302);
+      const stateCookie = start.headers.getSetCookie().find((value) => value.startsWith('oauth_state='))?.split(';')[0];
+      assert.ok(stateCookie);
+      const state = stateCookie.split('=')[1].split('.')[0];
+      return request(`/api/auth/google/callback?state=${state}&code=mock-code`, { redirect: 'manual' }, stateCookie);
+    };
+    const first = await callback();
+    assert.equal(first.status, 302);
+    const firstSession = first.headers.getSetCookie().find((value) => value.startsWith('session='))?.split(';')[0];
+    assert.ok(firstSession);
+    assert.equal((await request('/api/auth/me', {}, firstSession)).status, 200);
+    assert.equal((await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password: 'not-a-password' }) })).status, 401);
+    assert.equal((await callback()).status, 302);
+    assert.equal(await User.countDocuments({ email }), 1);
+    await User.create({ name: 'Existing Password QA', email: collisionEmail, passwordHash: await bcrypt.hash('correct-horse', 4) });
+    identity = { ...identity, sub: 'different-google-subject', email: collisionEmail };
+    const collision = await callback();
+    assert.equal(collision.status, 302);
+    assert.match(collision.headers.get('location'), /oauthError=account-exists/);
+    assert.equal(collision.headers.getSetCookie().some((value) => value.startsWith('session=')), false);
+    assert.equal((await User.findOne({ email: collisionEmail }).select('+googleSubject')).googleSubject, undefined);
+  } finally {
+    OAuth2Client.prototype.generateAuthUrl = original.generate; OAuth2Client.prototype.getToken = original.token; OAuth2Client.prototype.verifyIdToken = original.verify;
+    for (const [key, value] of Object.entries({ GOOGLE_CLIENT_ID: saved.id, GOOGLE_CLIENT_SECRET: saved.secret, GOOGLE_CALLBACK_URL: saved.callback, CLIENT_ORIGIN: saved.origin })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
 });
 
 test('Google deletion reauthentication uses the existing callback and distinguishes cancellation', { skip: !enabled }, async () => {
@@ -144,15 +218,22 @@ test('privacy export is isolated and account deletion verifies identity', { skip
   const otherCookie = `${sessionCookie(other)}; csrfToken=other-csrf`;
   const created = await request('/api/contacts', { method: 'POST', body: JSON.stringify({ firstName: 'Private', notes: 'private note', category: 'Personal' }) }, cookie);
   const contact = (await created.json()).contact;
+  const otherContact = (await (await request('/api/contacts', { method: 'POST', body: JSON.stringify({ firstName: 'Other private' }) }, otherCookie)).json()).contact;
+  const month = new Date().toISOString().slice(0, 7);
+  assert.equal((await request('/api/goals', { method: 'POST', body: JSON.stringify({ month, target: 2 }) }, cookie)).status, 201);
   const exported = await request('/api/privacy/export', {}, cookie);
   assert.equal(exported.status, 200); assert.equal(exported.headers.get('cache-control'), 'no-store'); assert.match(exported.headers.get('content-disposition'), /attachment/);
-  const data = await exported.json(); assert.equal(data.profile.email, email); assert.equal(data.contacts[0].notes, 'private note'); assert.equal(JSON.stringify(data).includes('passwordHash'), false); assert.equal(JSON.stringify(data).includes('resetToken'), false);
+  const data = await exported.json(); assert.equal(data.profile.email, email); assert.equal(data.contacts[0].notes, 'private note'); assert.equal(data.contacts.length, 1); assert.equal(data.objectives.length, 1); assert.equal(JSON.stringify(data).includes('passwordHash'), false); assert.equal(JSON.stringify(data).includes('resetToken'), false);
   assert.equal((await request('/api/privacy/export')).status, 401);
   assert.equal((await request(`/api/contacts/${contact._id}`, {}, otherCookie)).status, 404);
   const csrf = csrfFrom(cookie);
+  assert.equal((await request('/api/privacy/account', { method: 'DELETE', body: JSON.stringify({ confirmation: 'DELETE MY ACCOUNT', currentPassword: 'correct-horse' }) }, cookie)).status, 400);
   assert.equal((await request('/api/privacy/account', { method: 'DELETE', body: JSON.stringify({ confirmation: 'DELETE MY ACCOUNT', currentPassword: 'wrong' }), headers: { 'x-csrf-token': csrf } }, cookie)).status, 401);
   assert.equal((await request('/api/privacy/account', { method: 'DELETE', body: JSON.stringify({ confirmation: 'DELETE MY ACCOUNT', currentPassword: 'correct-horse' }), headers: { 'x-csrf-token': csrf } }, cookie)).status, 204);
   assert.equal((await request('/api/auth/me', {}, cookie)).status, 401);
+  assert.equal(await Contact.countDocuments({ owner: user._id }), 0);
+  assert.equal(await Goal.countDocuments({ owner: user._id }), 0);
+  assert.equal((await request(`/api/contacts/${otherContact._id}`, {}, otherCookie)).status, 200);
 });
 
 test('goals and reminders calculate progress and enforce ownership', { skip: !enabled }, async () => {
@@ -166,6 +247,11 @@ test('goals and reminders calculate progress and enforce ownership', { skip: !en
   const goals = await request('/api/goals', {}, cookie); assert.equal((await goals.json()).goals[0].current, 1);
   assert.equal((await request(`/api/goals/${goal._id}`, { method: 'PATCH', body: JSON.stringify({ target: 3 }) }, otherCookie)).status, 404);
   const reminders = await request('/api/reminders?status=upcoming', {}, cookie); assert.equal((await reminders.json()).reminders.length, 1);
+  assert.equal((await (await request('/api/reminders?status=upcoming', {}, otherCookie)).json()).reminders.length, 0);
+  assert.equal((await request(`/api/contacts/${contact._id}/reminder`, { method: 'PATCH', body: JSON.stringify({ reminderEmailEnabled: true }) }, otherCookie)).status, 404);
+  const rescheduled = await request(`/api/contacts/${contact._id}/reminder`, { method: 'PATCH', body: JSON.stringify({ followUpAt: new Date(Date.now() - 60000).toISOString(), reminderEmailEnabled: false }) }, cookie);
+  assert.equal(rescheduled.status, 200);
+  assert.equal((await (await request('/api/reminders?status=overdue', {}, cookie)).json()).reminders.length, 1);
   assert.equal((await request(`/api/contacts/${contact._id}/reminder`, { method: 'PATCH', body: JSON.stringify({ followUpStatus: 'Completed' }) }, cookie)).status, 200);
   assert.equal((await request('/api/reminders', {}, cookie)).json && (await (await request('/api/reminders', {}, cookie)).json()).reminders.length, 0);
 });
@@ -200,6 +286,22 @@ test('reminder scheduler claims atomically, retries safely, and recovers stale c
     state = await Contact.findById(failed._id).select('+notificationAttempts +notificationNextAttemptAt');
     assert.equal(state.notificationAttempts, 3); assert.equal(failures, 3);
     await processDueReminders(); assert.equal(failures, 3);
+  } finally { setTransportOverride(undefined); }
+});
+
+test('mailer uses mocked transport, correct recipients, and escaped reminder HTML', async () => {
+  const sent = [];
+  setTransportOverride(() => ({ sendMail: async (mail) => { sent.push(mail); } }));
+  try {
+    await sendPasswordResetEmail('owner@example.invalid', 'sample-test-token');
+    await sendReminderEmail({ email: 'owner@example.invalid', contactName: '<Contact>', followUpAt: new Date('2030-01-01T12:00:00Z'), note: '<script>unsafe</script>' });
+    assert.equal(sent.length, 2);
+    assert.equal(sent[0].to, 'owner@example.invalid');
+    assert.match(sent[0].text, /20 minutes/);
+    assert.equal(sent[1].to, 'owner@example.invalid');
+    assert.match(sent[1].text, /2030-01-01T12:00:00.000Z/);
+    assert.match(sent[1].html, /&lt;Contact&gt;/);
+    assert.doesNotMatch(sent[1].html, /<script>/);
   } finally { setTransportOverride(undefined); }
 });
 

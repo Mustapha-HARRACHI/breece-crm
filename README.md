@@ -1,68 +1,70 @@
 # BREECE CRM
 
-Minimal MERN foundation for a personal contact management application.
+BREECE CRM is a personal contact-management application prepared as a professional project showcase for JEECE. It helps users organize relationships, schedule follow-ups, and track network growth.
 
-## Prerequisites
+## Features
 
-- Node.js and npm
-- Docker with Docker Compose
+- Email/password registration and login, Google sign-in, password recovery, and persistent HttpOnly-cookie sessions.
+- Private contact management with search, filters, details, and follow-up reminders.
+- Contact-growth statistics, monthly objectives, and reminder notifications opted in per reminder.
+- Personal-data export and account deletion.
+- A separate demo environment with one synthetic account, 100 fictional contacts, six objectives, and 20 reminders.
 
-## Setup
+## Stack and architecture
+
+React 19 and Vite provide the browser UI. The UI sends `/api` requests through Vite to an Express 5 REST API on Node.js, which uses Mongoose with MongoDB 8. Docker Compose runs the local client, API, and database; the optional mailer uses SMTP, and Google sign-in uses OpenID Connect.
+
+## Run the main application
+
+Requirements: Docker Engine and the Docker Compose plugin. Create the ignored server environment file and set a strong, unique `JWT_SECRET` before startup:
 
 ```bash
 cp server/.env.example server/.env
-npm install
-npm run install:all
-```
-
-## Run
-
-### Docker Compose
-
-```bash
+# Edit server/.env; never commit real credentials.
+docker compose config --quiet
 docker compose up -d --build
 docker compose ps
-docker compose logs
+curl -f http://127.0.0.1:5000/api/health
 ```
 
-Open http://localhost:5173. The backend is available at http://localhost:5000. Stop with `docker compose down`; this preserves the existing `mongodb_data` volume. Never use `docker compose down -v`.
+Open <http://localhost:5173>. The API health endpoint is also proxied at <http://localhost:5173/api/health>. The database is stored in the persistent `mongodb_data` volume. `docker compose down` stops the stack without deleting that data; do not use `down -v` unless intentionally erasing it.
 
-### Native development
+Native development is also supported. With `server/.env` configured, run `docker compose up -d mongodb`, then in separate terminals run `npm run dev --prefix server` and `npm run dev --prefix client`. The client proxy targets `http://localhost:5000` by default.
 
-Start MongoDB:
+## Isolated fictional demo
+
+The demo has a separate Compose project, MongoDB database, and persistent volume. It does not mount or connect to the main database; its UI and API use localhost ports 5175 and 5002.
 
 ```bash
-docker compose up -d mongodb
+cp demo/.env.example demo/.env
+# Set unique DEMO_JWT_SECRET and DEMO_USER_PASSWORD; use a DEMO_USER_EMAIL under example.test.
+# Set DEMO_ANCHOR_DATE to a YYYY-MM-DD UTC date and keep it stable across seed reruns.
+docker compose --env-file demo/.env -f compose.demo.yaml config --quiet
+docker compose --env-file demo/.env -f compose.demo.yaml up -d --build
+docker compose --env-file demo/.env -f compose.demo.yaml run --rm demo-seed node src/scripts/seedDemo.js --dry-run
+DEMO_SEED_CONFIRM=breece_crm_demo docker compose --env-file demo/.env -f compose.demo.yaml run --rm demo-seed
+docker compose --env-file demo/.env -f compose.demo.yaml ps
+curl -f http://127.0.0.1:5002/api/health
 ```
 
-In one terminal, start the backend:
+Open <http://localhost:5175> and sign in using the demo email and password configured in `demo/.env`. The seed refuses other database targets, requires the explicit confirmation shown above for writes, and is repeatable. Demo contact emails use the reserved `example.test` domain; reminder email notifications are disabled. Stop only the demo with `docker compose --env-file demo/.env -f compose.demo.yaml down`; this preserves its data and leaves the main CRM untouched.
+
+## Tests
 
 ```bash
-npm run dev --prefix server
+npm test --prefix server
+npm run build --prefix client
+npm run test:e2e --prefix client
+npm audit --prefix server
+npm audit --prefix client
 ```
 
-In another terminal, start the frontend:
+MongoDB-backed server tests need `MONGODB_URI` pointing to a disposable test database; never point tests at the main or demo database. Playwright browser tests require the configured browser and a running test application; its default base URL is `http://127.0.0.1:5174` and can be changed with `QA_BASE_URL`.
 
-```bash
-npm run dev --prefix client
-```
+## Security and publication status
 
-Open http://localhost:5173. The frontend checks `GET /api/health` through the Vite proxy.
+Authentication uses bcrypt hashes, JWTs in HttpOnly cookies, ownership checks, Google OAuth state/PKCE protections, single-use password-reset tokens, and rate limits on sensitive endpoints. Reminder emails are opt-in and addressed to the account owner.
 
-### Authentication configuration
+The frontend audit currently reports **four high-severity package alerts propagated from one Picomatch advisory (CVE-2026-112366 / GHSA-fc5q-39xc-vjpf)** in the Vite development/build dependency tree. Picomatch 4.0.7 is affected and no patched release was verified; this is not resolved. The production dependency audit is clean, and the static frontend build does not ship Picomatch, but development/build environments remain exposed. Keep Vite's development server local; never expose it publicly. Production requires serving a static build over HTTPS and further deployment-specific security verification. Live Google OAuth and SMTP production checks remain outstanding.
 
-Copy `server/.env.example` to `server/.env` and set `JWT_SECRET`. Google OAuth requires this callback URL:
-
-`http://localhost:5000/api/auth/google/callback`
-
-Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL`. Password recovery requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`. Live Google and SMTP verification requires real credentials.
-
-Stop MongoDB with `docker compose down`. Data is retained in the `mongodb_data` volume.
-
-### Cookies and sessions
-
-The application uses only essential cookies: the HttpOnly `session` cookie (7-day JWT session), a readable `csrfToken` cookie for CSRF headers, and a short-lived HttpOnly `oauth_state` cookie during Google sign-in. Cookies are `Secure` in production, use `SameSite=Strict` for the application session (Lax for OAuth), and are cleared on logout or account deletion. No analytics, advertising, tracking, or optional cookies are used, so no optional consent is requested.
-
-### Security deployment notes
-
-The Express API and Vite development server send baseline security headers. The Docker client is a development server and its CSP permits only the Vite development websocket plus the minimal React development allowances; production frontend hosting must send its own restrictive CSP because browser document headers come from the frontend server. Local HTTP uses `TRUST_PROXY=0` and `ENABLE_HSTS=false`. Behind a trusted HTTPS reverse proxy, set `NODE_ENV=production`, `TRUST_PROXY=1` only when the deployment has exactly one trusted proxy hop, and enable HSTS only after HTTPS is enforced end-to-end. Do not expose the development Vite server publicly.
+No license is included. The owner's licensing decision and explicit JEECE publication authorization remain pending.

@@ -1,5 +1,11 @@
 node_modules
 dist
+test-results
+playwright-report
+coverage
+.vite
+.cache
+playwright/.cache
 .env
 .env.*
 !.env.example
